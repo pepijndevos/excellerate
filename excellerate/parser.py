@@ -1,4 +1,3 @@
-from openpyxl import load_workbook
 from openpyxl.utils.cell import range_to_tuple, range_boundaries
 from openpyxl.formula import Tokenizer
 from parsy import regex, generate, test_item, string, seq, fail
@@ -33,16 +32,16 @@ exp_t = test_token("OPERATOR-INFIX", value={'^'})
 per_t = test_token("OPERATOR-POSTFIX", value={'%'})
 sign_t = test_token("OPERATOR-PREFIX", value={'+', '-'})
 
-@dataclass
+@dataclass(frozen=True)
 class Function:
     name: str
     args: List[Any]
 
-@dataclass
+@dataclass(frozen=True)
 class Array:
     elements: List[Any]
 
-@dataclass
+@dataclass(frozen=True)
 class Range:
     sheet: str
     boundaries: Tuple[int, int, int, int]
@@ -132,6 +131,9 @@ class TestQ(unittest.TestCase):
 
     def test_op(self):
         self.assertEqual(parse("=5>1+2*3^-4"), ('>', 5.0, ('+', 1.0, ('*', 2.0, ('^', 3.0, -4.0)))))
+
+    def test_group(self):
+        self.assertEqual(parse("=5>(1+2)*3^-4"), ('>', 5.0, ('*', ('+', 1.0, 2.0), ('^', 3.0, -4.0))))
 
 if __name__ == '__main__':
     unittest.main() 

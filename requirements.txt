@@ -1,0 +1,4 @@
+openpyxl
+parsy
+nmigen[builtin-yosys]
+nmigen-boards
