@@ -2,21 +2,27 @@ from nmigen import *
 from nmigen.sim.pysim import *
 from openpyxl import load_workbook
 from collections import defaultdict
-from dataclasses import dataclass
 
-from fixedpoint import Q
+from fixedpoint import Q, QArray
 import parser
+from functions import Location, Cell, Sum
 
-@dataclass(frozen=True)
-class Location:
-    sheet: str
-    col: int
-    row: int
+class CellDict(defaultdict):
+    def __init__(self, nint, nfrac, signed):
+        super().__init__()
+        self.nint = nint
+        self.nfrac = nfrac
+        self.signed = signed
 
-@dataclass(frozen=True)
-class Cell:
-    value: Q
-    ready: Signal = Signal()
+    def __missing__(self, key):
+        name = f"{key.sheet}_{key.col}_{key.row}"
+        sig = Signal(Shape(self.nint+self.nfrac, self.signed), name=name)
+        ready = Signal(name=name)
+        cell = Cell(Q(self.nint, self.nfrac, self.signed, sig), ready)
+        self[key] = cell
+        return cell
+
+
 
 class Spreadsheet(Elaboratable):
 
@@ -24,8 +30,10 @@ class Spreadsheet(Elaboratable):
         self.nint = nint
         self.nfrac = nfrac
         self.signed = signed
-        self.cells = defaultdict(lambda: Cell(Q(self.nint, self.nfrac, self.signed)))
         self.workbook = workbook
+        self.submodules = []
+
+        self.cells = CellDict(nint, nfrac, signed)
 
     def elaborate(self, platform):
         m = Module()
@@ -39,10 +47,11 @@ class Spreadsheet(Elaboratable):
                         cell = self.cells[Location(sheet, cell.column, cell.row)]
                         m.d.sync += cell.value.eq(sig.value)
                         m.d.sync += cell.ready.eq(sig.ready)
+        m.submodules += self.submodules
         return m
 
     def compile_cell(self, cell, ast):
-        if not ast:
+        if ast is None:
             return None
         elif isinstance(ast, tuple):
             op, left, right = ast
@@ -81,11 +90,11 @@ class Spreadsheet(Elaboratable):
             )
         elif isinstance(ast, parser.Array):
             return Cell(
-                Array(
-                    Array(
+                QArray([
+                    QArray([
                         Q.from_float(i, self.nint, self.nfrac, self.signed)
-                        for i in row)
-                    for row in ast.elements),
+                        for i in row])
+                    for row in ast.elements]),
                 Const(0)
             )
         elif isinstance(ast, parser.Range):
@@ -94,29 +103,30 @@ class Spreadsheet(Elaboratable):
             if min_col==max_col and min_row==max_row:
                 return self.cells[Location(sheet, min_col, min_row)]
             return Cell(
-                Array(
-                    Array(
+                QArray([
+                    QArray([
                         self.cells[Location(sheet, col, row)].value
-                        for col in range(min_col, max_col+1))
-                    for row in range(min_row, max_row+1)),
-                Cat(self.cells[Location(sheet, col, row)]
+                        for col in range(min_col, max_col+1)])
+                    for row in range(min_row, max_row+1)]),
+                Cat(self.cells[Location(sheet, col, row)].ready
                     for col in range(min_col, max_col+1)
                     for row in range(min_row, max_row+1)).any()
             )
         elif isinstance(ast, parser.Function):
-            pass
+            if ast.name == "SUM":
+                args = [self.compile_cell(cell, arg) for arg in ast.args]
+                summer = Sum(*args)
+                self.submodules.append(summer)
+                return summer.result
         else:
             raise TypeError(f"{ast} is not of a supported type")
 
 if __name__ == '__main__':
-    from nmigen.cli import main
     wb = load_workbook('simple.xlsx')
     spr = Spreadsheet(wb)
     sim = Simulator(spr)
     def testbench():
-        for i in range(5):
-            A1 = spr.cells[Location("Sheet1", 1, 1)].value
-            yield A1.eq(A1+Q.from_float(3.0, 2, 0))
+        for i in range(50):
             yield Tick()
             print("###### TICK ######")
             for loc, cell in spr.cells.items():
@@ -125,4 +135,5 @@ if __name__ == '__main__':
 
     sim.add_clock(1e-6)
     sim.add_process(testbench)
-    sim.run()
+    with sim.write_vcd("test.vcd", "test.gtkw", traces=[c.value.signal for c in spr.cells.values()]):
+        sim.run()

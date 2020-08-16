@@ -1,8 +1,11 @@
 from nmigen import *
 from nmigen.sim.pysim import *
-import unittest
 import math
 from functools import wraps
+from collections.abc import MutableSequence
+
+import unittest
+from nmigen.hdl.ast import ArrayProxy
 
 def operator(logical=False):
     def decorator(op):
@@ -48,14 +51,14 @@ class Q:
         start = self.nfrac-nfrac
         end = self.nfrac+nint
         sig = self.signal[max(0, start):end]
-        if self.signal.shape().signed:
+        if self.signed:
             pad_end = Repl(self.signal[-1], max(0, nint-self.nint))
         else:
             pad_end = Const(0, max(0, nint-self.nint))
         pad_start = Const(0, max(0, nfrac-self.nfrac))
 
         sig = Cat(pad_start, sig, pad_end)
-        if self.signal.shape().signed:
+        if self.signed:
             sig = sig.as_signed()
         return Q(nint, nfrac, signal=sig) 
 
@@ -64,11 +67,18 @@ class Q:
         return self.signal.eq(other.signal)
 
     def __repr__(self):
-        signed = "i" if self.signal.shape().signed else "u"
+        signed = "i" if self.signed else "u"
         return f"(Q{self.nint}.{self.nfrac}{signed} {self.signal})"
 
     def __len__(self):
         return self.nint + self.nfrac
+
+    def shape(self):
+        return self.signal.shape()
+    
+    @property
+    def signed(self):
+        return self.signal.shape().signed
 
     def __bool__(self):
         raise TypeError("Attempted to convert nMigen value to Python boolean")
@@ -126,6 +136,52 @@ class Q:
         return Q(self.nint+other.nint, self.nfrac+other.nfrac, signal=res)
 
 
+class QArray(MutableSequence):
+    def __init__(self, iterable=(), nint=None, nfrac=None, signed=None):
+        if isinstance(iterable, Array) or isinstance(iterable, Value): # created from nested array
+            self.signal = iterable
+            self.nint = nint
+            self.nfrac = nfrac
+            self.signed = signed
+            self.child_class = Q#self.child_attr(iterable, "__class__")
+        else:
+            self.signal    = Array(q.signal for q in iterable)
+            self.nint = self.child_attr(iterable, "nint")
+            self.nfrac = self.child_attr(iterable, "nfrac")
+            self.signed = self.child_attr(iterable, "signed")
+            self.child_class = self.child_attr(iterable, "__class__")
+
+    def child_attr(self, iterable, attr):
+        val = None
+        for i in iterable:
+            ival = getattr(i, attr)
+            if val is not None:
+                assert val == ival
+            val = ival
+        return val
+
+    def __getitem__(self, index):
+        if self.child_class == Q:
+            return Q(self.nint, self.nfrac, signal=self.signal[index])
+        elif self.child_class == QArray:
+            return QArray(self.signal[index], self.nint, self.nfrac, self.signed)
+        else:
+            raise TypeError(f"{self.child_class} is not supported")
+
+    def __len__(self):
+        return len(self.signal)
+
+    def __setitem__(self, index, value):
+        self.signal[index] = value.signal
+
+    def __delitem__(self, index):
+        del self.signal[index]
+
+    def insert(self, index, value):
+        self.signal.insert(index, value.signal)
+
+    def __repr__(self):
+        return "Q" + repr(self.signal)
 
 #### TESTS ####
 
@@ -302,6 +358,45 @@ class TestQ(unittest.TestCase):
         self.assertEqual(o.nint, 10)
         self.assertEqual(o.nfrac, 17)
         self.assertLess(abs(_resolve_fp(o)-2*math.pi), 1e-4)
+
+class TestQArray(unittest.TestCase):
+
+    def test_lookup(self):
+        a = QArray([
+            Q.from_float(math.pi, 8, 16),
+            Q.from_float(math.e, 8, 16),
+            Q.from_float(1, 8, 16),
+            ])
+        n = a[0]
+        m = a[Const(0)]
+        self.assertEqual(type(m), Q)
+        self.assertEqual(type(m.signal), ArrayProxy)
+        self.assertEqual(m.nint, 8)
+        self.assertEqual(m.nfrac, 16)
+        self.assertEqual(m.signed, False)
+        self.assertEqual(_resolve_fp(n), _resolve_fp(m))
+
+    def test_nested_lookup(self):
+        a = QArray([
+                QArray([
+                    Q.from_float(math.pi, 8, 16),
+                    Q.from_float(math.e, 8, 16),
+                    Q.from_float(1, 8, 16),
+                    ]),
+                QArray([
+                    Q.from_float(math.pi, 8, 16),
+                    Q.from_float(math.e, 8, 16),
+                    Q.from_float(1, 8, 16),
+                    ])
+            ])
+        n = a[0][0]
+        m = a[Const(0)][Const(0)]
+        self.assertEqual(type(m), Q)
+        self.assertEqual(type(m.signal), ArrayProxy)
+        self.assertEqual(m.nint, 8)
+        self.assertEqual(m.nfrac, 16)
+        self.assertEqual(m.signed, False)
+        self.assertEqual(_resolve_fp(n), _resolve_fp(m))
 
 if __name__ == '__main__':
     unittest.main() 
