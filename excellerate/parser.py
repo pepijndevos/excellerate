@@ -103,7 +103,8 @@ expr = literal | precedence(simple, exp_t, mult_t, add_t, conc_t, comp_t)
 
 def parse(formula):
     tokenizer = Tokenizer(formula)
-    return expr.parse(tokenizer.items)
+    tokens = [t for t in tokenizer.items if t.type != "WHITE-SPACE"]
+    return expr.parse(tokens)
 
 
 #### TESTS ####

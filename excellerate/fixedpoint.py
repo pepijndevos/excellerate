@@ -18,7 +18,7 @@ def operator(logical=False):
             if logical:
                 return Q(1, 0, signal=res)
             else:
-                return Q(len(res)-args[0].nfrac, args[0].nfrac, signal=res)
+                return Q(len(res)-nfrac, nfrac, signal=res)
         return do_op
     return decorator
 
@@ -61,6 +61,9 @@ class Q:
         if self.signed:
             sig = sig.as_signed()
         return Q(nint, nfrac, signal=sig) 
+
+    def like(self):
+        return Q(self.nint, self.nfrac, self.signed)
 
     def eq(self, other):
         other = other.cast(self.nint, self.nfrac)
@@ -135,7 +138,7 @@ class Q:
         assert len(res) == len(self)+len(other)
         return Q(self.nint+other.nint, self.nfrac+other.nfrac, signal=res)
 
-
+#TODO inhomogeneous?
 class QArray(MutableSequence):
     def __init__(self, iterable=(), nint=None, nfrac=None, signed=None):
         if isinstance(iterable, Array) or isinstance(iterable, Value): # created from nested array
@@ -143,6 +146,7 @@ class QArray(MutableSequence):
             self.nint = nint
             self.nfrac = nfrac
             self.signed = signed
+            # only works for 2 levels of nesting
             self.child_class = Q#self.child_attr(iterable, "__class__")
         else:
             self.signal    = Array(q.signal for q in iterable)
